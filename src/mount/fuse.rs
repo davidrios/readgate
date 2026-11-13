@@ -229,7 +229,7 @@ impl GatedFolder {
             Node::Created(path) => {
                 let path = self.created_path(path);
                 let meta = fs::metadata(&path).map_err(|_| Errno::ENOENT)?;
-                let perm = (meta.mode() & 0o7777) as u16;
+                let perm = (meta.mode() & 0o777) as u16;
                 (meta, perm, owner_of(&path))
             }
         };
@@ -457,8 +457,8 @@ impl Filesystem for GatedFolder {
         if matches!(self.node_at(&path), Some((_, Node::Mapped(_) | Node::Dir(_)))) {
             return reply.error(Errno::EEXIST);
         }
-        let opened = fs::create_dir_all(self.created_path(&dir))
-            .and_then(|()| open_created(&self.created_path(&path), flags, true, mode & !umask & 0o7777));
+        let opened = private_dir_all(&self.created_path(&dir))
+            .and_then(|()| open_created(&self.created_path(&path), flags, true, mode & !umask & PLAIN_MODE));
         let file = match opened {
             Ok(file) => file,
             Err(e) => return reply.error(errno(&e)),
@@ -590,7 +590,7 @@ impl Filesystem for GatedFolder {
                         OpenOptions::new().write(true).open(&path)?.set_len(size)?;
                     }
                     if let Some(mode) = mode {
-                        fs::set_permissions(&path, fs::Permissions::from_mode(mode & 0o7777))?;
+                        fs::set_permissions(&path, fs::Permissions::from_mode(mode & PLAIN_MODE))?;
                     }
                     Ok::<(), std::io::Error>(())
                 })();
@@ -686,7 +686,7 @@ impl Filesystem for GatedFolder {
                 if no_replace && target.is_some() {
                     return reply.error(Errno::EEXIST);
                 }
-                let moved = fs::create_dir_all(self.created_path(to.parent().unwrap_or(Path::new(""))))
+                let moved = private_dir_all(&self.created_path(to.parent().unwrap_or(Path::new(""))))
                     .and_then(|()| fs::rename(self.created_path(&from), self.created_path(&to)));
                 return match moved {
                     Ok(()) => {
@@ -799,6 +799,18 @@ fn read_at(file: &File, offset: u64, size: u32) -> std::io::Result<Vec<u8>> {
     Ok(data)
 }
 
+/// The mode bits a created file may have: no setuid, setgid or sticky.
+/// Its scratch copy is readgate's, so a setuid bit would make a program of
+/// another user's content that runs as the user running readgate.
+const PLAIN_MODE: u32 = 0o777;
+
+/// Scratch folders are only readgate's: other users reach created files
+/// through the mount, where the kernel checks them, never on disk.
+fn private_dir_all(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    fs::DirBuilder::new().recursive(true).mode(0o700).create(path)
+}
+
 /// Replaces `source`'s content with `from`'s, in place.
 fn copy_into(from: &Path, source: &Path) -> std::io::Result<()> {
     let mut from = File::open(from)?;
@@ -832,7 +844,9 @@ pub fn mount_folder(
         fs::create_dir_all(folder).with_context(|| format!("creating {}", folder.display()))?;
     }
     // Files programs created in earlier runs are still there, still theirs.
-    fs::create_dir_all(scratch).with_context(|| format!("creating {}", scratch.display()))?;
+    private_dir_all(scratch).with_context(|| format!("creating {}", scratch.display()))?;
+    // Folders made before they were private.
+    fs::set_permissions(scratch, fs::Permissions::from_mode(0o700))?;
 
     let fs = GatedFolder {
         mappings,

@@ -400,10 +400,10 @@ read it with `jq` while readgate runs.
 
 ## Building
 
-mitsuami 2.2.0 isn't on crates.io yet. Until it is, `Cargo.toml` builds it
-from a checkout at `../mitsuami`, through `[patch.crates-io]`. Once it's
-released, delete that section. readgate needs `App::runs_without_windows`
-and `quit`, which are in the local checkout's 2.2.0 and not in 2.1.
+readgate needs mitsuami 2.3.0, for `App::runs_without_windows` and `quit`.
+Until it's on crates.io, `Cargo.toml` builds it from a checkout at
+`../mitsuami`, through `[patch.crates-io]`. Once it's released, delete that
+section.
 
 readgate is distributed as a binary, so every dependency is pinned to an
 exact version.

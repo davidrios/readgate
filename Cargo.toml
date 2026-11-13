@@ -13,7 +13,7 @@ publish = false
 anyhow = "=1.0.104"
 async-channel = "=2.5.0"
 directories = "=6.0.0"
-mitsuami = "=2.2.0"
+mitsuami = "=2.3.0"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
 time = { version = "=0.3.55", features = ["formatting", "parsing", "local-offset", "serde", "macros"] }
@@ -26,7 +26,7 @@ libc = "=0.2.191"
 [target.'cfg(target_os = "linux")'.dependencies]
 fuser = "=0.18.0"
 
-# mitsuami 2.2.0 isn't on crates.io yet: build it from the local checkout.
-# Remove this section once it's released.
+# mitsuami 2.3.0 (App::runs_without_windows, quit) isn't on crates.io yet:
+# build it from the local checkout. Remove this section once it's released.
 [patch.crates-io]
 mitsuami = { path = "../mitsuami/crates/mitsuami" }
