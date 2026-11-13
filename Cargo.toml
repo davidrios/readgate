@@ -1,0 +1,32 @@
+[package]
+name = "readgate"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+description = "Ask before any program reads your files: each read of a mounted file waits for your approval."
+license = "MIT OR Apache-2.0"
+authors = ["David Rios <david.rios.gomes@gmail.com>"]
+publish = false
+
+# readgate ships as a binary: every dependency is pinned to an exact version.
+[dependencies]
+anyhow = "=1.0.104"
+async-channel = "=2.5.0"
+directories = "=6.0.0"
+mitsuami = "=2.2.0"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+time = { version = "=0.3.55", features = ["formatting", "parsing", "local-offset", "serde", "macros"] }
+toml = "=1.2.0"
+
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.191"
+
+# FUSE without libfuse: fuser mounts through fusermount3.
+[target.'cfg(target_os = "linux")'.dependencies]
+fuser = "=0.18.0"
+
+# mitsuami 2.2.0 isn't on crates.io yet: build it from the local checkout.
+# Remove this section once it's released.
+[patch.crates-io]
+mitsuami = { path = "../mitsuami/crates/mitsuami" }
