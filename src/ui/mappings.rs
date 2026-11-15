@@ -42,8 +42,7 @@ fn columns(rows: Signal<Vec<MappingRow>>) -> Vec<TableColumn<MappingRow>> {
             Text::new(move || {
                 match latest(id).map(|r| r.status) {
                     Some(Status::Mounted) => "Mounted",
-                    Some(Status::Failed(_)) => "Not mounted",
-                    _ => "…",
+                    _ => "Not mounted",
                 }
                 .to_string()
             })
@@ -65,10 +64,9 @@ pub fn screen(state: State) -> impl View {
             state.remove(&ids);
         }
     };
-    // Restarts the server, which mounts everything again.
     let retry = {
         let state = state.clone();
-        move || state.restart()
+        move || state.remount()
     };
     let can_retry = move || rows.get().iter().any(|r| r.status != Status::Mounted);
     // Why the selected mappings aren't mounted.

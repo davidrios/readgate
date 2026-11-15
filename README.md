@@ -5,9 +5,8 @@ when you let the file be written.
 
 You give it a source file, a mount folder, and a dest path inside that
 folder. readgate mounts the folder through FUSE and shows the source at the
-dest. When a program reads the dest, readgate holds the read and shows you
-a dialog with
-everything it can find out about the reader: the executable, its command
+dest. When a program reads the dest, readgate holds the read and asks you,
+with everything it can find out about the reader: the executable, its command
 line, its user, its working folder and the processes that started it. If
 you allow it, the read goes through. If you deny it, the reader gets an
 ordinary I/O error. Either way the reader sees a plain file, and to it the
@@ -18,9 +17,9 @@ handing it over. readgate runs as you and reads the source as you. The other
 user's programs only ever see the dest, and each read waits on your answer.
 Every answer goes to a log file.
 
-A server of readgate's holds the mounts and asks the questions, and keeps
-running after you close the app. The app edits the mappings and shows what
-the server does.
+readgate is one process: it holds the mounts, asks the questions, and keeps
+running in the tray after you close its window. Quitting it unmounts
+everything.
 
 It's a desktop app built with [mitsuami](https://mitsuami.roboport.com.br), so
 it uses each platform's own controls: GTK 4 on Linux, AppKit on macOS and
@@ -34,56 +33,60 @@ WinUI 3 on Windows.
 | macOS | Not yet, see [macOS](#macos) | Program only |
 | Windows | Not yet, see [Windows](#windows) | None |
 
-On Linux I've run it end to end, as my own user. `ls` and `stat` in the
-mounted folder never prompted. `cat` blocked until the prompt was answered,
-printed the source on Allow, and failed with `Input/output error` on Deny.
-With no answer, it failed after the timeout. Escape denied. Writing to a
-read-only mapping failed with `Read-only file system`. On a writable one,
-`echo >` asked once. A save made by writing a temporary file and renaming it
-over the dest asked once and replaced the source's content, and a denied one
+On Linux I've run it end to end. `ls` and `stat` in the mounted folder
+never prompted. `cat` blocked until the prompt was answered, printed the
+source on Allow, and failed with `Input/output error` on Deny. With no
+answer, it failed after the timeout. Escape denied. Writing to a read-only
+mapping failed with `Read-only file system`. On a writable one, `echo >`
+asked once. A save made by writing a temporary file and renaming it over
+the dest asked once and replaced the source's content, and a denied one
 left it alone. vim with its default settings loaded the file and saved it.
 Files mapped into subfolders showed up there, and the subfolders couldn't
 be made or removed. A mount set to `david:wheel` and `0660` listed its
 folders as `drwxrwx--- david wheel`, and its files as `-rw-rw----`, or
 `-r--r-----` read-only; one set to `root:root` and `0700` gave
-`Permission denied` without a prompt. Closing the app left the server and
-its mounts up, and a read then got a notification from the server alone
-(mako, on Hyprland); clicking it opened the window, whose details could be
-selected, and Allow let the read through and took the notification away.
-With no answer, the notification went away when time ran out. Reopening the app joined the
-running server, and its log screen showed the next answer. Adding and
-deleting a mapping restarted the server with the new mappings, and
-`readgate stop` stopped it and unmounted everything. Every answer landed in
-the log. Mounts for other users haven't been tried yet, because this
-machine doesn't have `user_allow_other` on.
+`Permission denied` without a prompt. Another user's programs (an agent
+running as its own user, with `user_allow_other` on) read through the
+mount, each read behind a prompt, and Allow for 1 Minute covered the
+agent's later commands. Every answer landed in the log.
 
-## The server
+All of that ran when readgate was two processes: a server holding the
+mounts, and the app. The one-process version shares that code, and what's
+been run with it so far is the mounts' life: it started and mounted, Quit
+in the tray's menu and `readgate stop` unmounted and ended it, Mount Again
+in the tray's menu mounted again each time, and starting over a dead mount
+left by an earlier version cleared it and mounted. The prompt and the tray
+icon haven't been checked with it yet.
 
-`readgate server` holds the mounts and answers their requests. You don't
-start it yourself: opening the app starts it if it isn't running, in a
-session of its own, so it keeps running after the app closes, and the next
-time the app opens it joins the running server.
+## Running in the background
 
-- It reads the config once, when it starts. Each change in the app (Add,
-  Delete) saves the config and restarts the server, which mounts the new
-  set of mappings. Mount Again restarts it too.
-- It answers one request at a time. For each one, it starts `readgate
-  prompt`, which posts the request's notification and waits, without a
-  window, until it's clicked, then shows the window, and reports Allow,
-  Deny or the timeout back. A click only reaches the process that posted
-  the notification, so the prompt runs until it's answered: mitsuami's
-  `App::runs_without_windows` keeps it going with no window open. If it
-  can't be shown at all (no display), the request is denied.
-- It talks to the app over a Unix socket in `$XDG_RUNTIME_DIR`, one per
-  config file: the mappings' status when the app connects, then each answer
-  as it's given.
-- `readgate stop` stops it. Stopping it unmounts everything. If it's killed
-  instead, the mounts unmount by themselves (`auto_unmount`).
-- Its output goes to `server.log` in readgate's data folder
-  (`~/.local/share/readgate/server.log` on Linux).
-- Prompts need a display, so the server gets the one the app had when it
-  started the server. It doesn't survive logging out if your session ends
-  your processes, as systemd does with `KillUserProcesses`.
+readgate keeps running after you close its window, with its icon in the
+tray, and its mounts stay up until you quit it.
+
+- The tray icon changes while a read is waiting. Its menu has the waiting
+  question, which opens the prompt, then Open readgate, Mount Again and
+  Quit. It's a StatusNotifierItem, which Plasma, waybar and GNOME with the
+  AppIndicator extension show. Plain GNOME has no tray: there, launching
+  readgate again opens its window.
+- It's one instance per session. Launching it again, `cargo run`
+  included, opens the running one's window. `readgate stop` quits the
+  running one, and `readgate --hidden` starts it with no window.
+- Starting it at login is up to you: an entry in `~/.config/autostart`
+  that runs `readgate --hidden`, or a systemd user service.
+- Quitting unmounts every mount folder, lazily (`fusermount3 -u -z`), so
+  it goes even with files open in it. If readgate is killed instead, the
+  mounts unmount by themselves (`auto_unmount`). If one is left behind
+  dead ("Transport endpoint is not connected"), readgate unmounts it the
+  next time it mounts that folder.
+- It reads the config when it starts. Add and Delete save the config, then
+  unmount every folder and mount the new set of mappings, in the same
+  process. Mount Again does the same. Allow for 1 Minute grants and a
+  question being asked carry over.
+- It asks about one request at a time. Each one posts a notification, and
+  its click opens the prompt window. A click only reaches the process that
+  posted the notification, which is why the prompt is part of the app.
+- It doesn't survive logging out if your session ends your processes, as
+  systemd does with `KillUserProcesses`.
 
 ## Mount folders
 
@@ -107,8 +110,7 @@ inside it (`dest`), which can be in subfolders:
 - The mount folder is readgate's alone. Mounting hides what's in a folder,
   so readgate refuses to mount over one that isn't empty, and the mappings
   screen says so. A folder that doesn't exist yet gets created.
-- Mappings with the same mount folder share one mount. Adding a mapping to
-  a mounted folder shows it without mounting again, and deleting the last
+- Mappings with the same mount folder share one mount. Deleting the last
   mapping in a folder unmounts it.
 - Subfolders exist because a dest is in them. Programs can't make, remove
   or rename folders. Two dests can't clash: the same path twice, or a file
@@ -133,8 +135,9 @@ inside it (`dest`), which can be in subfolders:
   them. Each belongs to whoever created it, as on any filesystem, and
   readgate keeps them at the same path in a scratch folder in its data
   folder (`~/.local/share/readgate/scratch/` on Linux), with the owner in
-  an extended attribute, so they're still there after a restart. In a mount whose mappings are all read-only,
-  creating files fails with `EROFS`.
+  an extended attribute, so they're still there after a restart. In a
+  mount whose mappings are all read-only, creating files fails with
+  `EROFS`.
 
 ## How a read goes
 
@@ -167,14 +170,22 @@ process and everything it starts. A program that runs a command in a shell
 for each file it reads (an agent, a build script) gets one prompt, not one
 per command.
 
-- When the parent is a shell, the button is a split button, and its menu
-  offers the first program up the chain that isn't one instead: "Allow
+- When there are programs further up the chain, the button is a split
+  button, and its menu offers each of them instead, closest first: "Allow
   claude (pid 51680) for 1 Minute". A program that runs each command in a
   fresh shell (an agent, `make`) starts a new parent each time, so a grant
   to the parent wouldn't reach its next command; one to the program does.
-  The shells it goes past are sh, bash, zsh, fish, dash, ksh, mksh, tcsh,
-  csh, nu, elvish, xonsh and busybox, by name (for another user's process,
-  the name it gives itself). Pid 1 never counts.
+  The parent is often not a shell: `git` running `ssh`, or `timeout`
+  running a script. The menu still reaches the agent past them.
+- The menu leaves out shells and wrappers that run one command and exit
+  with it, since a grant to them would cover nothing after: sh, bash, zsh,
+  fish, dash, ksh, mksh, tcsh, csh, nu, elvish, xonsh, busybox, timeout and
+  env, by name (for another user's process, the name it gives itself).
+- It stops before pid 1, before a process of another user than the
+  reader's (`sudo`, `sshd`), and before the root of the reader's session,
+  the process whose parent is one of those: a terminal multiplexer's
+  server, or the user's service manager. A grant to that would cover
+  everything the user runs.
 - The grant is tied to its process by its pid and its start time, so a later
   process that happens to get the same pid isn't covered.
 - It covers the kind of access it was given or less. A grant for reading and
@@ -183,9 +194,9 @@ per command.
 - Requests waiting in line behind the prompt are checked when their turn
   comes, so those from the same parent go through too.
 - The log records them as `granted`. A grant lasts until a minute has
-  passed or the server restarts, whichever comes first.
+  passed or readgate quits, whichever comes first.
 - A reader whose parent readgate can't find gets no such button, and one
-  whose parent isn't a shell gets a plain button.
+  with nothing further up to offer gets a plain button.
 
 Files are opened with direct I/O, so the kernel never caches their pages.
 Without that, the kernel could hand pages you allowed for one reader to the
@@ -243,19 +254,24 @@ The mount folder has to satisfy two more conditions:
   in. A group they're in, with a mode like `0640` or `0660`, does
   that.
 
-While it's mounted, nobody can delete or rename the mount folder. If readgate
-quits or crashes, the folder unmounts (`auto_unmount`) and goes back to being
-the empty folder underneath. After you delete a folder's last mapping,
-readgate leaves the empty folder behind.
+While it's mounted, nobody can delete or rename the mount folder. When
+readgate quits or crashes, the folder unmounts and goes back to being the
+empty folder underneath. After you delete a folder's last mapping, readgate
+leaves the empty folder behind.
 
 The mount's name in `/proc/mounts` is `readgate`, without the sources'
 paths, because every user can read that table.
 
 ## The app
 
+**The window.** The mappings and the log, in tabs. Closing it leaves
+readgate in the tray; Open readgate in the tray's menu, or launching
+readgate again, opens it. A problem saving the config shows below the
+tabs.
+
 **Mappings.** A table of the mappings, with the source, the dest's full
 path, whether it's read-only or read and write, its mount folder's owner
-and mode, and whether the server mounted it ("…" while the server starts).
+and mode, and whether it's mounted.
 Add opens a dialog with the source and the mount folder (both typed, or
 picked with the platform's file dialogs), the folder's owner and mode, the
 path inside the mount folder, and a Read-only checkbox to untick for a
@@ -263,21 +279,21 @@ writable mapping. The mount folder starts as the last one used, with its
 owner and mode, and the path as the source's file name. Owner and mode
 apply to the whole folder, and left blank they keep what the folder has. A
 mode that isn't octal is refused before anything is saved. Delete removes
-the selected mappings. Add and Delete restart the server. Mount Again
-restarts it too, to retry mappings that failed once you've fixed whatever
-stopped them. Selecting a mapping that isn't mounted shows why below the
-table.
+the selected mappings. Add and Delete mount the mappings again. Mount Again
+does too, to retry mappings that failed once you've fixed whatever stopped
+them. Selecting a mapping that isn't mounted shows why below the table.
 
-**Log.** The answers given while the app is open, oldest first, in a read-only monospace text
-area. Each answer is a line with the time, answer, program, pid, user and
+**Log.** The answers given since readgate started, oldest first, in a
+read-only monospace text area. Each answer is a line with the time, answer, program, pid, user and
 file, followed by everything known about the reader, indented. The area
 follows its end as answers come in, unless you've scrolled up. It starts
-empty on each run and keeps the last 1000 answers. Earlier runs' answers are
-in the log file.
+empty each time readgate starts and keeps the last 1000 answers. Earlier
+runs' answers are in the log file.
 
-**The prompt.** A notification first, from the server, whether the app is
-open or not: "Allow cat to read notes.txt?", with the program, its pid and
-its user. Clicking it opens a window that lists the reader's details,
+**The prompt.** A notification first, whether the window is open or not:
+"Allow cat to read notes.txt?", with the program, its pid and its user.
+Clicking it, or the question in the tray's menu, opens a window that lists
+the reader's details,
 counts down ("Denies in 1:45"), and offers Deny, Allow for 1 Minute (with
 a line saying which process it covers) and Allow. The window is
 as tall as what it shows, up to a point, past which the details scroll.
@@ -326,7 +342,9 @@ TOML, in the platform's config folder:
 | Windows | `%APPDATA%\roboport\readgate\config\config.toml` |
 
 `READGATE_CONFIG=/some/file.toml` uses another file, which helps when trying
-things out.
+things out. It only applies to the readgate that starts first: a later
+launch goes to the running one, whatever config it names, so quit the
+running one before trying another.
 
 ```toml
 # Optional. Defaults to access.log in the platform's data folder
@@ -374,8 +392,9 @@ for `dest`, and writes it that way the next time it saves the config.
 
 readgate reads the file at start and writes it back after every Add and
 Delete. It writes to a temporary file and renames it over the old one, so a
-crash never leaves half a config. You can edit the file by hand while the app
-is closed. Edits made while it runs get overwritten on the next change. Ids
+crash never leaves half a config. You can edit the file by hand while
+readgate isn't running: closing its window isn't enough, quit it. Edits
+made while it runs get overwritten on the next change. Ids
 only need to be unique. The log uses them to tell mappings apart.
 
 ## Access log
@@ -400,7 +419,9 @@ read it with `jq` while readgate runs.
 
 ## Building
 
-readgate needs mitsuami 2.3.0, for `App::runs_without_windows` and `quit`.
+readgate needs mitsuami 2.4.0, for the tray and one instance per session.
+Until 2.4.0 is on crates.io, it builds against a local checkout of mitsuami
+next to this one (`../mitsuami`).
 
 readgate is distributed as a binary, so every dependency is pinned to an
 exact version.
@@ -415,7 +436,8 @@ READGATE_CONFIG=/tmp/try.toml cargo run   # with a throwaway config
 ```
 
 To try it without dialogs landing on your desktop, run it on a private GTK
-Broadway display and open http://localhost:8087 in a browser:
+Broadway display and open http://localhost:8087 in a browser. The tray icon
+still goes to your desktop's tray, since it's a D-Bus service, not a window.
 
 ```sh
 gtk4-broadwayd :7 &
@@ -426,31 +448,33 @@ GDK_BACKEND=broadway BROADWAY_DISPLAY=:7 cargo run
 
 | File | |
 |---|---|
-| `src/main.rs` | The commands: the app, `server`, `stop`, `prompt` |
+| `src/main.rs` | The commands: the app, `--hidden`, `stop` |
 | `src/config.rs` | Config file, mappings, mount folders' settings, the scratch folders |
-| `src/server.rs` | The server: mounts, a prompt window per request, the log, the app's connections |
-| `src/ipc.rs` | The app and the server's socket: starting, stopping, following the server |
+| `src/service.rs` | "Allow for 1 Minute" grants, what a prompt shows, the access log |
 | `src/perms.rs` | A mount folder's owner and mode, from text to numbers |
-| `src/gate.rs` | A filesystem thread sends a request and blocks; the server answers |
+| `src/gate.rs` | A filesystem thread sends a request and blocks; the app answers |
 | `src/mount/mod.rs` | Groups mappings by mount folder, checks for clashes, mounts each folder |
-| `src/mount/fuse.rs` | The FUSE filesystem: a tree of gated files, their folders, and created files |
+| `src/mount/fuse.rs` | The FUSE filesystem: a tree of gated files, their folders, and created files; mounting and unmounting |
 | `src/reader.rs` | What the platform says about a pid |
 | `src/access_log.rs` | Log entries, and appending them to the file |
-| `src/ui/` | The app's window, its mappings and log screens, and the prompt (notification and window) |
+| `src/ui/mod.rs` | The app: mounting, the request loop, the tray, the window |
+| `src/ui/mappings.rs`, `src/ui/log.rs` | The window's screens |
+| `src/ui/prompt.rs` | The prompt: its notification and window, one request at a time |
 
 FUSE requests come in on fuser's session thread. A request that needs an
 answer moves to a thread of its own, so a prompt left up for minutes doesn't
 stop other requests, such as another reader's `getattr` or a `release`. That
-thread sends the request to the server's loop over a channel and blocks on
-the reply. If the loop is gone, the answer is Deny. The prompt window ends
-itself at the deadline, and the server stops one that runs 2 seconds over.
-As a backstop, the filesystem thread itself stops waiting 5 seconds after
-the deadline, so a stuck server can't hold a reader forever.
+thread sends the request to the app's loop, a task on the UI thread, over a
+channel and blocks on the reply. If the loop is gone, the answer is Deny.
+The prompt answers itself at the deadline. As a backstop, the filesystem
+thread itself stops waiting 5 seconds after the deadline, so a stuck UI
+can't hold a reader forever.
 
 ## Limits
 
-- readgate's server has to be running. While it's not, the mount folder is
-  empty.
+- readgate has to be running. While it's not, the mount folder is empty.
+- Plain GNOME shows no tray icon, so a closed window comes back only by
+  launching readgate again.
 - Root can read the source directly. readgate controls one path to a file,
   not who can reach the file.
 - An allowed reader can do what it likes with the bytes it got, including
@@ -493,14 +517,13 @@ WinFsp SDK.
 
 ### Later
 
+- An icon of readgate's own. The tray shows theme icons for now
+  (`changes-prevent-symbolic`, and `dialog-question-symbolic` while a read
+  waits).
 - Remember an answer: "always allow this program" for a mapping, kept in
   the config.
-- A notification when the window is hidden, and running from the tray or
-  menu bar instead of keeping a window open.
 - Tests with `mitsuami-test` for the screens and the prompt, using its
   scripted dialogs.
-- Starting the server at login (a systemd user service, a macOS launch
-  agent), instead of when the app opens.
 - Changing a mount folder's owner and mode for a folder that's already set,
   from the mappings screen instead of through Add.
 

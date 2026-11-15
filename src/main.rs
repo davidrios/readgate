@@ -7,30 +7,27 @@
 mod access_log;
 mod config;
 mod gate;
-mod ipc;
 mod mount;
 mod perms;
 mod reader;
-mod server;
+mod service;
 mod ui;
 
 use config::Config;
 
-/// `readgate` opens the app; `readgate server` runs the server (the app
-/// starts it); `readgate stop` stops it; `readgate prompt` shows one
-/// prompt (the server starts it).
+/// `readgate` opens the app, or the running one's window; `readgate
+/// --hidden` starts it in the tray only; `readgate stop` quits the running
+/// one.
 fn main() -> anyhow::Result<()> {
     // Before any thread starts.
     ui::init_local_offset();
+    let start = match std::env::args().nth(1).as_deref() {
+        None => ui::Start::Open,
+        Some("--hidden") => ui::Start::Hidden,
+        Some("stop") => ui::Start::Stop,
+        Some(other) => anyhow::bail!("readgate: {other:?} isn't a command; use none, --hidden or stop"),
+    };
     let config_path = config::default_config_file();
-    match std::env::args().nth(1).as_deref() {
-        Some("server") => server::run(config_path),
-        Some("stop") => ipc::shutdown(&config_path),
-        Some("prompt") => ui::prompt::run(),
-        Some(other) => anyhow::bail!("readgate: {other:?} isn't a command; use none, server, stop or prompt"),
-        None => {
-            ui::run(config_path.clone(), Config::load(&config_path)?);
-            Ok(())
-        }
-    }
+    ui::run(config_path.clone(), Config::load(&config_path)?, start);
+    Ok(())
 }

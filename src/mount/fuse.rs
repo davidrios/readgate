@@ -820,7 +820,62 @@ fn copy_into(from: &Path, source: &Path) -> std::io::Result<()> {
 }
 
 pub struct Mounted {
+    folder: PathBuf,
     _session: fuser::BackgroundSession,
+}
+
+/// Unmounts before the session goes. Dropping the session alone doesn't:
+/// with `auto_unmount`, fuser only closes its socket to fusermount3's
+/// watcher, which unmounts only a mount whose connection is dead, and it's
+/// still alive at that moment, so the watcher leaves, and the mount stays
+/// behind dead ("Transport endpoint is not connected") once the session
+/// ends. Killing the process works, since that closes both at once.
+impl Drop for Mounted {
+    fn drop(&mut self) {
+        unmount(&self.folder);
+    }
+}
+
+/// Lazily (`-z`): it's detached even with files open in it.
+fn unmount(folder: &Path) {
+    match std::process::Command::new("fusermount3").args(["-u", "-z", "-q", "--"]).arg(folder).status() {
+        Ok(status) if status.success() => {}
+        Ok(status) => eprintln!("readgate: fusermount3 couldn't unmount {}: {status}", folder.display()),
+        Err(e) => eprintln!("readgate: couldn't run fusermount3 to unmount {}: {e}", folder.display()),
+    }
+}
+
+/// A mount of readgate's left at `folder` whose process is gone: its
+/// connection is dead, so the folder can't even be looked at.
+fn is_dead_mount(folder: &Path) -> bool {
+    let dead = matches!(fs::metadata(folder), Err(e) if e.raw_os_error() == Some(libc::ENOTCONN));
+    // Only readgate's own: the mount table names each mount's type.
+    dead && fs::read_to_string("/proc/self/mountinfo").is_ok_and(|table| {
+        // As fuser mounted it: canonical. The folder itself can't be
+        // resolved while its mount is dead, but its parent can.
+        let canonical = match (folder.parent().map(fs::canonicalize), folder.file_name()) {
+            (Some(Ok(parent)), Some(name)) => parent.join(name),
+            _ => folder.to_owned(),
+        };
+        let point = escape_mount_path(&canonical);
+        table.lines().any(|line| {
+            let mut fields = line.split(' ');
+            fields.nth(4) == Some(point.as_str()) && line.contains(" - fuse.readgate ")
+        })
+    })
+}
+
+/// As the mount table writes a path: space, tab, newline and backslash as
+/// octal escapes.
+fn escape_mount_path(path: &Path) -> String {
+    let mut out = String::new();
+    for c in path.to_string_lossy().chars() {
+        match c {
+            ' ' | '\t' | '\n' | '\\' => out.push_str(&format!("\\{:03o}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Mounts `folder` with `mappings` in it until the returned value is
@@ -834,6 +889,12 @@ pub fn mount_folder(
 ) -> anyhow::Result<Mounted> {
     use anyhow::Context;
 
+    // Left by a readgate that died: it can be mounted again once it's
+    // unmounted.
+    if is_dead_mount(folder) {
+        eprintln!("readgate: unmounting the dead mount left at {}", folder.display());
+        unmount(folder);
+    }
     // readgate needs the folder to itself: mounting hides what's in it.
     if folder.exists() {
         let mut entries = fs::read_dir(folder).with_context(|| format!("reading {}", folder.display()))?;
@@ -880,5 +941,5 @@ pub fn mount_folder(
     config.acl = SessionACL::All;
     // fusermount3's own error says what to change (user_allow_other).
     let session = fuser::spawn_mount(fs, folder, &config).context("mounting")?;
-    Ok(Mounted { _session: session })
+    Ok(Mounted { folder: folder.to_owned(), _session: session })
 }

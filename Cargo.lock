@@ -3,6 +3,12 @@
 version = 4
 
 [[package]]
+name = "adler2"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
+
+[[package]]
 name = "anyhow"
 version = "1.0.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -115,6 +121,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ca0197aee26d1ae37445ee532fefce43251d24cc7c166799f4d46817f1d3973"
 dependencies = [
  "crossbeam-utils",
+]
+
+[[package]]
+name = "crc32fast"
+version = "1.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b929dd2a135771f40afabd1073f85eed59c800b7c61901e5c254270497dad64"
+dependencies = [
+ "cfg-if",
 ]
 
 [[package]]
@@ -237,6 +252,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fdeflate"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e6853b52649d4ac5c0bd02320cddc5ba956bdb407c4b75a2c6b75bf51500f8c"
+dependencies = [
+ "simd-adler32",
+]
+
+[[package]]
 name = "field-offset"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -251,6 +275,17 @@ name = "find-msvc-tools"
 version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
+
+[[package]]
+name = "flate2"
+version = "1.1.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "626d4928326b646e70f65ed36fc7cf9f206bdb68a0019ee7c6b4709da4e084c4"
+dependencies = [
+ "crc32fast",
+ "miniz_oxide 0.9.1",
+ "zlib-rs",
+]
 
 [[package]]
 name = "fluent-bundle"
@@ -775,10 +810,28 @@ dependencies = [
 ]
 
 [[package]]
-name = "mitsuami"
-version = "2.3.0"
+name = "miniz_oxide"
+version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "adaeb94b636e5a8f6c3c79b6e81bb47392cc792a178f495cb3b97121039cbc4c"
+checksum = "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
+dependencies = [
+ "adler2",
+ "simd-adler32",
+]
+
+[[package]]
+name = "miniz_oxide"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"
+dependencies = [
+ "adler2",
+ "simd-adler32",
+]
+
+[[package]]
+name = "mitsuami"
+version = "2.4.0"
 dependencies = [
  "mitsuami-appkit",
  "mitsuami-core",
@@ -791,9 +844,7 @@ dependencies = [
 
 [[package]]
 name = "mitsuami-appkit"
-version = "2.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "994735cdeaf26c7229cb96d21f549d6aef52b7cf0ca79f19800482fe7a83f129"
+version = "2.4.0"
 dependencies = [
  "block2",
  "dispatch2",
@@ -811,9 +862,7 @@ dependencies = [
 
 [[package]]
 name = "mitsuami-core"
-version = "2.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "199eaa608ea348f9b4e9b2b52d126b7b5a585525885431178c0a20844ae272b9"
+version = "2.4.0"
 dependencies = [
  "fluent-bundle",
  "fluent-langneg",
@@ -828,9 +877,7 @@ dependencies = [
 
 [[package]]
 name = "mitsuami-gtk"
-version = "2.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64827f4676a58f6acee8cd12d5ab3e3029aeaa86dc6d35e7fe8cbec033bd3105"
+version = "2.4.0"
 dependencies = [
  "gtk4",
  "libadwaita",
@@ -842,11 +889,12 @@ dependencies = [
 
 [[package]]
 name = "mitsuami-linux"
-version = "2.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6b8c8158d7a0f1765bc4f8a52e75da6bbcf8e1907d3c9c4a65b862c49d916ca"
+version = "2.4.0"
 dependencies = [
+ "gio",
+ "glib",
  "mitsuami-core",
+ "png",
  "wayland-backend",
  "wayland-client",
  "wayland-protocols",
@@ -855,9 +903,7 @@ dependencies = [
 
 [[package]]
 name = "mitsuami-macros"
-version = "2.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dee0bf8e0ca6623a1dbec1aae7c6b18286b31a6318c6c52ec627dfa5988c6de3"
+version = "2.4.0"
 dependencies = [
  "fluent-syntax",
  "proc-macro2",
@@ -868,18 +914,14 @@ dependencies = [
 
 [[package]]
 name = "mitsuami-reactive"
-version = "2.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f89cb0c4fc1c251db51e2d88fd1550894161a0bc3d995a0b07f6decfc86c7c6"
+version = "2.4.0"
 dependencies = [
  "slotmap",
 ]
 
 [[package]]
 name = "mitsuami-widgets"
-version = "2.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "872db6921463a080f3efd9ba123c1cfcd42f725cd68f6e008c0af3542dce70bb"
+version = "2.4.0"
 dependencies = [
  "mitsuami-core",
  "mitsuami-reactive",
@@ -887,9 +929,7 @@ dependencies = [
 
 [[package]]
 name = "mitsuami-winui"
-version = "2.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15baaca09ed2cf84551acbe1137c08a9cda4a140f525eefe8889477b37a767fe"
+version = "2.4.0"
 dependencies = [
  "mitsuami-core",
  "mitsuami-widgets",
@@ -1255,6 +1295,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
+name = "png"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60769b8b31b2a9f263dae2776c37b1b28ae246943cf719eb6946a1db05128a61"
+dependencies = [
+ "bitflags",
+ "crc32fast",
+ "fdeflate",
+ "flate2",
+ "miniz_oxide 0.8.9",
+]
+
+[[package]]
 name = "polycool"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1481,6 +1534,12 @@ name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
+
+[[package]]
+name = "simd-adler32"
+version = "0.3.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
 
 [[package]]
 name = "slab"
@@ -2004,6 +2063,12 @@ dependencies = [
  "serde",
  "zerofrom",
 ]
+
+[[package]]
+name = "zlib-rs"
+version = "0.6.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b268e58e7c693d7c271f93ffc4ba3b380412554231c85bf61ca7af91042a4112"
 
 [[package]]
 name = "zmij"

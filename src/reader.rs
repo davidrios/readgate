@@ -157,25 +157,45 @@ fn short_name(exe: Option<&PathBuf>, cmdline: &[String], name: Option<&str>) -> 
         .or_else(|| name.map(str::to_owned))
 }
 
-/// Programs that only run other programs for someone: a grant for "the
-/// first program that isn't a shell" goes past them.
-const SHELLS: &[&str] =
-    &["sh", "bash", "zsh", "fish", "dash", "ksh", "mksh", "tcsh", "csh", "nu", "elvish", "xonsh", "busybox"];
+/// Programs that only run other programs for someone: shells, and
+/// wrappers that run one command and exit with it. "Allow for 1 Minute"'s
+/// menu leaves them out, since each command an agent runs gets a fresh one
+/// and a grant to it would cover nothing after.
+const PASS_THROUGH: &[&str] = &[
+    "sh", "bash", "zsh", "fish", "dash", "ksh", "mksh", "tcsh", "csh", "nu", "elvish", "xonsh", "busybox", "timeout",
+    "env",
+];
 
 impl ReaderInfo {
-    /// The nearest ancestor that isn't a shell, and its place in
-    /// `ancestors`: what a shell's commands were started by. Pid 1 doesn't
-    /// count: it started everything.
-    pub fn first_program(&self) -> Option<(usize, &Ancestor)> {
-        self.ancestors.iter().enumerate().take_while(|(_, a)| a.pid != 1).find(|(_, a)| !a.is_shell())
+    /// The ancestors past the parent that "Allow for 1 Minute"'s menu
+    /// offers, with their places in `ancestors`: each one up the chain
+    /// that isn't a shell or a wrapper. It stops before pid 1, before
+    /// another user's process (`sudo`, `sshd`), and before the root of the
+    /// reader's session, whose parent is one of those (a terminal
+    /// multiplexer's server, the user's service manager): a grant to it
+    /// would cover everything the user runs.
+    pub fn grant_choices(&self) -> Vec<(usize, &Ancestor)> {
+        // An unknown user means the process is gone: stop there too.
+        let outside = |a: &Ancestor| a.pid == 1 || a.uid != Some(self.uid);
+        let mut choices = Vec::new();
+        for (at, a) in self.ancestors.iter().enumerate() {
+            if outside(a) || self.ancestors.get(at + 1).is_none_or(outside) {
+                break;
+            }
+            // The parent is the button's own choice.
+            if at > 0 && !a.passes_through() {
+                choices.push((at, a));
+            }
+        }
+        choices
     }
 }
 
 impl Ancestor {
     /// By its name: a starred one (another user's) counts as it calls
     /// itself.
-    pub fn is_shell(&self) -> bool {
-        self.program().is_some_and(|p| SHELLS.contains(&p.trim_start_matches('-')))
+    pub fn passes_through(&self) -> bool {
+        self.program().is_some_and(|p| PASS_THROUGH.contains(&p.trim_start_matches('-')))
     }
 
     /// "bash (pid 4242)", for the prompt.
