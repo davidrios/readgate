@@ -25,8 +25,3 @@ libc = "=0.2.191"
 # FUSE without libfuse: fuser mounts through fusermount3.
 [target.'cfg(target_os = "linux")'.dependencies]
 fuser = "=0.18.0"
-
-# mitsuami 2.3.0 (App::runs_without_windows, quit) isn't on crates.io yet:
-# build it from the local checkout. Remove this section once it's released.
-[patch.crates-io]
-mitsuami = { path = "../mitsuami/crates/mitsuami" }

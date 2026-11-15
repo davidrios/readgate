@@ -401,9 +401,6 @@ read it with `jq` while readgate runs.
 ## Building
 
 readgate needs mitsuami 2.3.0, for `App::runs_without_windows` and `quit`.
-Until it's on crates.io, `Cargo.toml` builds it from a checkout at
-`../mitsuami`, through `[patch.crates-io]`. Once it's released, delete that
-section.
 
 readgate is distributed as a binary, so every dependency is pinned to an
 exact version.
