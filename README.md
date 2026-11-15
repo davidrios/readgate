@@ -25,38 +25,8 @@ It's a desktop app built with [mitsuami](https://mitsuami.roboport.com.br), so
 it uses each platform's own controls: GTK 4 on Linux, AppKit on macOS and
 WinUI 3 on Windows.
 
-## Status
-
-| Platform | Mounting | Reader details |
-|---|---|---|
-| Linux | Works | Program, command line, user, group, working folder, parents |
-| macOS | Not yet, see [macOS](#macos) | Program only |
-| Windows | Not yet, see [Windows](#windows) | None |
-
-On Linux I've run it end to end. `ls` and `stat` in the mounted folder
-never prompted. `cat` blocked until the prompt was answered, printed the
-source on Allow, and failed with `Input/output error` on Deny. With no
-answer, it failed after the timeout. Escape denied. Writing to a read-only
-mapping failed with `Read-only file system`. On a writable one, `echo >`
-asked once. A save made by writing a temporary file and renaming it over
-the dest asked once and replaced the source's content, and a denied one
-left it alone. vim with its default settings loaded the file and saved it.
-Files mapped into subfolders showed up there, and the subfolders couldn't
-be made or removed. A mount set to `david:wheel` and `0660` listed its
-folders as `drwxrwx--- david wheel`, and its files as `-rw-rw----`, or
-`-r--r-----` read-only; one set to `root:root` and `0700` gave
-`Permission denied` without a prompt. Another user's programs (an agent
-running as its own user, with `user_allow_other` on) read through the
-mount, each read behind a prompt, and Allow for 1 Minute covered the
-agent's later commands. Every answer landed in the log.
-
-All of that ran when readgate was two processes: a server holding the
-mounts, and the app. The one-process version shares that code, and what's
-been run with it so far is the mounts' life: it started and mounted, Quit
-in the tray's menu and `readgate stop` unmounted and ended it, Mount Again
-in the tray's menu mounted again each time, and starting over a dead mount
-left by an earlier version cleared it and mounted. The prompt and the tray
-icon haven't been checked with it yet.
+What works on each platform, and what's been tried, is in
+[STATUS.md](STATUS.md).
 
 ## Running in the background
 
