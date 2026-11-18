@@ -16,20 +16,30 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
 /// One source file shown at `dest` inside the folder `mount`, behind a
-/// prompt.
+/// prompt. Or, for a folder mapping, every file directly in the source
+/// folder, each shown in the folder `dest` and asked about on its own.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Mapping {
     /// Stable across edits and restarts, so the UI and the log can refer
     /// to a mapping while its paths change.
     pub id: u64,
-    /// The real file. Only readgate (running as you) reads it.
+    /// The real file, or for a folder mapping the real folder. Only
+    /// readgate (running as you) reads it.
     pub source: PathBuf,
     /// The folder readgate mounts. Mappings with the same one share it.
     #[serde(default)]
     pub mount: PathBuf,
     /// Where the file is in `mount`, e.g. `token.txt` or `keys/deploy`:
-    /// what other programs and users open, at `mount/dest`.
+    /// what other programs and users open, at `mount/dest`. For a folder
+    /// mapping, the folder its files show in, e.g. `keys`, or empty for
+    /// the mount folder itself.
+    #[serde(default)]
     pub dest: PathBuf,
+    /// Whether `source` is a folder whose files all show in `dest`: the
+    /// regular files directly in it, read as they are when a program looks,
+    /// so files added later show up. Not its subfolders, nor symlinks.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub folder: bool,
     /// Whether the dest refuses writes. When false, writes (and
     /// truncating) go through to the source, behind the same prompt.
     #[serde(default = "read_only_by_default")]
@@ -47,18 +57,34 @@ impl Mapping {
     }
 
     /// The dest inside its mount, checked: relative, down only, and naming
-    /// a file. `None` if it isn't.
+    /// a file, or for a folder mapping a folder, which can be the mount
+    /// folder itself (empty). `None` if it isn't.
     pub fn dest_components(&self) -> Option<Vec<std::ffi::OsString>> {
         use std::path::Component;
         let parts: Option<Vec<_>> = self
             .dest
             .components()
+            .filter(|c| *c != Component::CurDir)
             .map(|c| match c {
                 Component::Normal(name) => Some(name.to_owned()),
                 _ => None,
             })
             .collect();
-        parts.filter(|p| !p.is_empty())
+        parts.filter(|p| self.folder || !p.is_empty())
+    }
+
+    /// A folder mapping's file `name`: the mapping it is, with the folder
+    /// mapping's id, so the log and the mappings screen know where it came
+    /// from.
+    pub fn file(&self, name: &std::ffi::OsStr) -> Mapping {
+        Mapping {
+            id: self.id,
+            source: self.source.join(name),
+            mount: self.mount.clone(),
+            dest: self.dest.join(name),
+            folder: false,
+            read_only: self.read_only,
+        }
     }
 
     /// Configs from before `mount` had the dest's full path: its folder is

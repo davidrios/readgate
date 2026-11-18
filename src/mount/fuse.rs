@@ -55,9 +55,11 @@ const TTL: Duration = Duration::from_secs(1);
 
 /// The mount folder itself.
 const ROOT: u64 = 1;
-/// A mapped file's inode is its mapping's id plus this.
+/// A mapped file's inode is its mapping's id plus this. A folder
+/// mapping's files get theirs by path, as folders do.
 const MAPPED_BASE: u64 = 2;
-/// Folders' and created files' inodes start here, past any mapping's.
+/// Folders', folder mappings' files' and created files' inodes start
+/// here, past any mapping's.
 const PATH_BASE: u64 = 1 << 48;
 
 /// An open mapped file: who opened it, for what, and the user's answer
@@ -87,8 +89,9 @@ enum Open {
     Created(Arc<File>),
 }
 
-/// Inodes for folders and created files, by their path inside the mount
-/// (the root is the empty path). Mapped files' come from their ids.
+/// Inodes for folders, folder mappings' files and created files, by their
+/// path inside the mount (the root is the empty path). Other mapped files'
+/// come from their mappings' ids.
 struct Inodes {
     by_path: HashMap<PathBuf, u64>,
     by_ino: HashMap<u64, PathBuf>,
@@ -143,26 +146,40 @@ struct GatedFolder {
     scratch: PathBuf,
     inodes: Arc<Mutex<Inodes>>,
     /// A created file renamed over a mapped one keeps its inode in the
-    /// kernel's cache for a moment: it's that mapped file now.
-    aliases: Arc<Mutex<HashMap<u64, u64>>>,
+    /// kernel's cache for a moment: it's the mapped file at this path now.
+    aliases: Arc<Mutex<HashMap<u64, PathBuf>>>,
     handles: Mutex<HashMap<u64, Open>>,
     next_handle: AtomicU64,
     perms: Perms,
 }
 
 impl GatedFolder {
-    fn mapping_at(&self, path: &Path) -> Option<Mapping> {
-        self.mappings.read().unwrap().iter().find(|m| m.dest == path).cloned()
+    /// The mapped file at `path`, with its inode: a file mapping's, or a
+    /// regular file directly in a folder mapping's source.
+    fn mapped_at(&self, path: &Path) -> Option<(u64, Mapping)> {
+        let mappings = self.mappings.read().unwrap();
+        if let Some(m) = mappings.iter().find(|m| !m.folder && m.dest == path) {
+            return Some((m.id + MAPPED_BASE, m.clone()));
+        }
+        let name = path.file_name()?;
+        let folder = mappings.iter().find(|m| m.folder && path.parent() == Some(m.dest.as_path()))?;
+        let file = folder.file(name);
+        // Not through a symlink: the folder's own files only.
+        if !fs::symlink_metadata(&file.source).is_ok_and(|meta| meta.is_file()) {
+            return None;
+        }
+        drop(mappings);
+        Some((self.inodes.lock().unwrap().of(path), file))
     }
 
     fn mapping_by_id(&self, id: u64) -> Option<Mapping> {
-        self.mappings.read().unwrap().iter().find(|m| m.id == id).cloned()
+        self.mappings.read().unwrap().iter().find(|m| !m.folder && m.id == id).cloned()
     }
 
-    /// The root, or a folder some dest is in.
+    /// The root, a folder some dest is in, or a folder mapping's dest.
     fn is_dir(&self, path: &Path) -> bool {
         path.as_os_str().is_empty()
-            || self.mappings.read().unwrap().iter().any(|m| m.dest.starts_with(path) && m.dest != path)
+            || self.mappings.read().unwrap().iter().any(|m| m.dest.starts_with(path) && (m.dest != path || m.folder))
     }
 
     /// Programs may create files here only if a mapping here is writable:
@@ -178,8 +195,8 @@ impl GatedFolder {
     /// What's at `path`: a mapped file wins over a folder, and both over a
     /// created file.
     fn node_at(&self, path: &Path) -> Option<(u64, Node)> {
-        if let Some(m) = self.mapping_at(path) {
-            return Some((m.id + MAPPED_BASE, Node::Mapped(m)));
+        if let Some((ino, m)) = self.mapped_at(path) {
+            return Some((ino, Node::Mapped(m)));
         }
         if self.is_dir(path) {
             return Some((self.inodes.lock().unwrap().of(path), Node::Dir(path.to_owned())));
@@ -191,14 +208,17 @@ impl GatedFolder {
     }
 
     fn node(&self, ino: u64) -> Option<Node> {
-        if let Some(id) = self.aliases.lock().unwrap().get(&ino) {
-            return self.mapping_by_id(*id).map(Node::Mapped);
+        let alias = self.aliases.lock().unwrap().get(&ino).cloned();
+        if let Some(path) = alias {
+            return self.mapped_at(&path).map(|(_, m)| Node::Mapped(m));
         }
         if (MAPPED_BASE..PATH_BASE).contains(&ino) {
             return self.mapping_by_id(ino - MAPPED_BASE).map(Node::Mapped);
         }
         let path = self.inodes.lock().unwrap().by_ino.get(&ino)?.clone();
-        if self.is_dir(&path) {
+        if let Some((_, m)) = self.mapped_at(&path) {
+            Some(Node::Mapped(m))
+        } else if self.is_dir(&path) {
             Some(Node::Dir(path))
         } else if self.created_path(&path).is_file() {
             Some(Node::Created(path))
@@ -302,12 +322,24 @@ impl GatedFolder {
     /// first, then created files of other names.
     fn entries(&self, dir: &Path) -> BTreeMap<OsString, (u64, FileType)> {
         let mut entries = BTreeMap::new();
-        for m in self.mappings.read().unwrap().iter() {
+        let mappings = self.mappings.read().unwrap().clone();
+        for m in &mappings {
+            if m.folder && m.dest == dir {
+                // Its regular files, as they are now: not its subfolders,
+                // nor symlinks.
+                for entry in fs::read_dir(&m.source).into_iter().flatten().flatten() {
+                    if entry.file_type().is_ok_and(|t| t.is_file()) {
+                        let ino = self.inodes.lock().unwrap().of(&dir.join(entry.file_name()));
+                        entries.insert(entry.file_name(), (ino, FileType::RegularFile));
+                    }
+                }
+                continue;
+            }
             let Ok(rest) = m.dest.strip_prefix(dir) else { continue };
             let mut parts = rest.components();
             let Some(first) = parts.next() else { continue };
             let name = first.as_os_str().to_owned();
-            if parts.next().is_none() {
+            if parts.next().is_none() && !m.folder {
                 entries.insert(name, (m.id + MAPPED_BASE, FileType::RegularFile));
             } else {
                 let ino = self.inodes.lock().unwrap().of(&dir.join(&name));
@@ -708,13 +740,14 @@ impl Filesystem for GatedFolder {
         let reader = ReaderInfo::of(req.pid(), req.uid(), req.gid());
         let handle = Arc::new(Handle::new(mapping.clone(), reader, Access::Write));
         let (inodes, aliases, created) = (self.inodes.clone(), self.aliases.clone(), self.created_path(&from));
+        let dest = to.clone();
         self.when_allowed(handle, move |allowed| {
             if !allowed || copy_into(&created, &mapping.source).is_err() {
                 return reply.error(Errno::EIO);
             }
             let _ = fs::remove_file(&created);
             inodes.lock().unwrap().forget(&from);
-            aliases.lock().unwrap().insert(ino, mapping.id);
+            aliases.lock().unwrap().insert(ino, dest);
             reply.ok();
         });
     }

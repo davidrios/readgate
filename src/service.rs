@@ -1,6 +1,7 @@
 //! What the app does with a request, apart from asking: the grants of
 //! "Allow for 1 Minute", what the prompt shows, and the access log.
 
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use time::OffsetDateTime;
@@ -18,6 +19,9 @@ const GRANT_LENGTH: Duration = Duration::from_secs(60);
 /// asking until it runs out.
 struct Grant {
     mapping_id: u64,
+    /// The file: a folder mapping's files share its id, and a grant is for
+    /// one of them.
+    source: PathBuf,
     access: Access,
     /// The process it was given to: a pid with its start time, so a later
     /// process that gets the pid again isn't it.
@@ -32,6 +36,7 @@ impl Grant {
         let is_it = |pid: u32, start: Option<u64>| pid == self.pid && start == self.start;
         now < self.until
             && request.mapping.id == self.mapping_id
+            && request.mapping.source == self.source
             && self.access.covers(request.access)
             && (is_it(reader.pid, reader.start) || reader.ancestors.iter().any(|a| is_it(a.pid, a.start)))
     }
@@ -57,6 +62,7 @@ impl Grants {
     pub fn give(&mut self, request: &AccessRequest, to: &Ancestor) {
         self.0.push(Grant {
             mapping_id: request.mapping.id,
+            source: request.mapping.source.clone(),
             access: request.access,
             pid: to.pid,
             start: to.start,

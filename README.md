@@ -67,7 +67,8 @@ original couldn't save to it. readgate mounts folders on every platform,
 so all three behave the same.
 
 Each mapping names its mount folder (`mount`) and where the file shows
-inside it (`dest`), which can be in subfolders:
+inside it (`dest`), which can be in subfolders. A folder mapping shares
+every file in a source folder instead, in the folder its `dest` names:
 
 ```
 /home/shared/gate/        <- readgate's mount
@@ -75,6 +76,9 @@ inside it (`dest`), which can be in subfolders:
   keys/                   <- there because a dest is in it
     deploy_key            <- dest "keys/deploy_key", gated
     .deploy_key.swp       <- an editor's temporary file, not gated
+  certs/                  <- a folder mapping's dest "certs"
+    server.pem            <- a file in its source folder, gated
+    server.key            <- another, gated and asked about on its own
 ```
 
 - The mount folder is readgate's alone. Mounting hides what's in a folder,
@@ -82,6 +86,15 @@ inside it (`dest`), which can be in subfolders:
   screen says so. A folder that doesn't exist yet gets created.
 - Mappings with the same mount folder share one mount. Deleting the last
   mapping in a folder unmounts it.
+- A folder mapping shows the regular files directly in its source folder,
+  as they are when a program looks: a file added there shows up, and one
+  removed goes, within a second. Its subfolders aren't shown, and neither
+  are symlinks, so a link in the source folder can't share a file from
+  somewhere else. Each file is asked about on its own, as a file mapping
+  is, and Allow for 1 Minute covers only the file it was given for.
+- A folder mapping's dest is its own: no other mapping can be in it. Its
+  dest can be empty, for the mount folder itself, which is then that
+  mapping's alone.
 - Subfolders exist because a dest is in them. Programs can't make, remove
   or rename folders. Two dests can't clash: the same path twice, or a file
   where another dest needs a folder (`keys` and `keys/deploy_key`), and
@@ -160,7 +173,8 @@ per command.
   process that happens to get the same pid isn't covered.
 - It covers the kind of access it was given or less. A grant for reading and
   writing covers both; one for reading doesn't cover writing.
-- Only that file. Another mapping, even in the same mount folder, asks.
+- Only that file. Another mapping, even in the same mount folder, asks, and
+  so does another file of the same folder mapping.
 - Requests waiting in line behind the prompt are checked when their turn
   comes, so those from the same parent go through too.
 - The log records them as `granted`. A grant lasts until a minute has
@@ -198,7 +212,11 @@ prompt:
 - Setting its times is accepted and ignored, so `touch` works.
 - readgate checks that it can write the source when it mounts, so a source
   it can't write shows as not mounted instead of failing after you allow a
-  write.
+  write. A folder mapping's files are only checked when they're written:
+  one readgate can't write fails with `EIO` after you allow it.
+- A writable folder mapping writes to the files already in its source
+  folder. Files programs create in its dest stay in readgate's scratch
+  folder, as in any mount; they don't land in the source folder.
 
 ## Sharing with another user (Linux)
 
@@ -242,11 +260,15 @@ tabs.
 **Mappings.** A table of the mappings, with the source, the dest's full
 path, whether it's read-only or read and write, its mount folder's owner
 and mode, and whether it's mounted.
+A folder mapping's source and dest end in `/*`.
 Add opens a dialog with the source and the mount folder (both typed, or
 picked with the platform's file dialogs), the folder's owner and mode, the
 path inside the mount folder, and a Read-only checkbox to untick for a
-writable mapping. The mount folder starts as the last one used, with its
-owner and mode, and the path as the source's file name. Owner and mode
+writable mapping. Every file in a folder makes it a folder mapping: the
+source is then a folder, and the path inside the mount folder is the
+folder its files show in, or empty for the mount folder itself. The mount
+folder starts as the last one used, with its owner and mode, and a file's
+path as the source's file name. Owner and mode
 apply to the whole folder, and left blank they keep what the folder has. A
 mode that isn't octal is refused before anything is saved. Delete removes
 the selected mappings. Add and Delete mount the mappings again. Mount Again
@@ -353,10 +375,20 @@ source = "/home/me/notes.txt"
 mount = "/home/shared/gate"
 dest = "notes.txt"
 read_only = false
+
+# Every file directly in /home/me/certs, each in /home/shared/gate/certs.
+[[mapping]]
+id = 4
+source = "/home/me/certs"
+mount = "/home/shared/gate"
+dest = "certs"
+# Optional. Defaults to false.
+folder = true
 ```
 
 `dest` is relative to `mount`, and can't leave it (`..` and absolute paths
-are refused). A mapping from an earlier version has only `dest`, as a full
+are refused). A folder mapping's `dest` can be left out, for the mount
+folder itself. A mapping from an earlier version has only `dest`, as a full
 path. readgate reads it as that path's folder for `mount` and its file name
 for `dest`, and writes it that way the next time it saves the config.
 
@@ -375,8 +407,9 @@ One JSON object per line, appended for each answer:
 {"time":"2026-11-06T10:05:33.042806855Z","mapping_id":1,"source":"/home/me/secrets/api-token.txt","dest":"/home/shared/gate/api-token.txt","reader":{"pid":973497,"uid":1001,"gid":1001,"user":"guest","exe":"/usr/bin/cat","cmdline":["cat","/home/shared/gate/api-token.txt"],"cwd":"/home/guest","ancestors":[{"pid":973495,"exe":"/usr/bin/bash"}]},"access":"read","decision":"allowed"}
 ```
 
-`dest` is the dest's full path. `access` is `read`, `write` or
-`read_write`, from how the file was opened.
+`dest` is the dest's full path. For a folder mapping's file, `mapping_id`
+is the folder mapping's, and `source` and `dest` are that file's. `access`
+is `read`, `write` or `read_write`, from how the file was opened.
 A save by rename is a `write`. `decision` is `allowed`, `denied`,
 `timed_out` or `granted` (allowed by an earlier Allow for 1 Minute, without
 asking). Times are UTC in RFC 3339. The log screen shows them in local

@@ -146,12 +146,15 @@ impl State {
     }
 
     /// `owner` and `mode` change the mount folder's settings, for all its
-    /// mappings; `None` keeps what it has.
+    /// mappings; `None` keeps what it has. With `folder`, `source` is a
+    /// folder whose files all show in the folder `dest`.
+    #[allow(clippy::too_many_arguments)]
     pub fn add(
         &self,
         source: PathBuf,
         mount: PathBuf,
         dest: PathBuf,
+        folder: bool,
         read_only: bool,
         owner: Option<String>,
         mode: Option<String>,
@@ -163,7 +166,7 @@ impl State {
             settings.mode = mode.or(settings.mode);
             config.set_mount_settings(settings);
             let id = config.next_id();
-            config.mappings.push(Mapping { id, source, mount, dest, read_only });
+            config.mappings.push(Mapping { id, source, mount, dest, folder, read_only });
         }
         self.save();
     }

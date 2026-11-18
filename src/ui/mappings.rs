@@ -14,10 +14,12 @@ use crate::perms::DEFAULT_MODE;
 fn columns(rows: Signal<Vec<MappingRow>>) -> Vec<TableColumn<MappingRow>> {
     let latest = move |id: u64| rows.get().into_iter().find(|r| r.mapping.id == id);
     vec![
-        TableColumn::new("Source", |r: MappingRow| Text::new(r.mapping.source.display().to_string()).max_lines(1))
+        // A folder mapping's are folders: every file in one, shown in the
+        // other.
+        TableColumn::new("Source", |r: MappingRow| Text::new(shown(&r.mapping.source, r.mapping.folder)).max_lines(1))
             .expand(),
         TableColumn::new("Mounted at", |r: MappingRow| {
-            Text::new(r.mapping.dest_path().display().to_string()).max_lines(1)
+            Text::new(shown(&r.mapping.dest_path(), r.mapping.folder)).max_lines(1)
         })
         .expand(),
         TableColumn::new("Access", |r: MappingRow| {
@@ -50,6 +52,11 @@ fn columns(rows: Signal<Vec<MappingRow>>) -> Vec<TableColumn<MappingRow>> {
         })
         .width(110),
     ]
+}
+
+/// A path for the table, ending in `/*` for a folder mapping's.
+fn shown(path: &std::path::Path, folder: bool) -> String {
+    if folder { format!("{}/*", path.display()) } else { path.display().to_string() }
 }
 
 pub fn screen(state: State) -> impl View {
@@ -115,6 +122,8 @@ fn add_window(state: State, open: Signal<bool>) -> impl View {
     let owner = signal(String::new());
     let mode = signal(String::new());
     let read_only = signal(true);
+    // Every file in a folder, instead of one file.
+    let folder = signal(false);
     // The folder's owner and mode, if a mapping uses it already.
     let load_settings = move |folder: &str| {
         let known =
@@ -131,11 +140,16 @@ fn add_window(state: State, open: Signal<bool>) -> impl View {
     };
     let choose_source = move || {
         spawn_local(async move {
-            if let Some(path) =
-                open_file(OpenFile::new().title("Choose the file to share")).await.and_then(|p| p.into_iter().next())
-            {
-                // The dest starts as the source's name.
-                if dest.get_untracked().trim().is_empty()
+            let request = if folder.get_untracked() {
+                OpenFile::new().title("Choose the folder whose files to share").directories()
+            } else {
+                OpenFile::new().title("Choose the file to share")
+            };
+            if let Some(path) = open_file(request).await.and_then(|p| p.into_iter().next()) {
+                // A file's dest starts as its name. A folder's files go in
+                // the mount folder itself unless a dest is given.
+                if !folder.get_untracked()
+                    && dest.get_untracked().trim().is_empty()
                     && let Some(name) = path.file_name()
                 {
                     dest.set(name.to_string_lossy().into_owned());
@@ -154,10 +168,16 @@ fn add_window(state: State, open: Signal<bool>) -> impl View {
         });
     };
     let filled = |s: Signal<String>| move || !s.get().trim().is_empty();
-    let ready = move || filled(source)() && filled(mount)() && filled(dest)() && mode_error().is_none();
+    // A folder's dest can be empty: the mount folder itself.
+    let ready =
+        move || filled(source)() && filled(mount)() && (folder.get() || filled(dest)()) && mode_error().is_none();
     let full_dest = move || {
         let path = PathBuf::from(mount.get().trim()).join(dest.get().trim());
-        format!("Other programs open it at {}.", path.display())
+        if folder.get() {
+            format!("Other programs open its files in {}, each asking on its own.", path.display())
+        } else {
+            format!("Other programs open it at {}.", path.display())
+        }
     };
     let given = |s: Signal<String>| Some(s.get_untracked().trim().to_owned()).filter(|t| !t.is_empty());
     let add = move || {
@@ -165,6 +185,7 @@ fn add_window(state: State, open: Signal<bool>) -> impl View {
             PathBuf::from(source.get_untracked().trim()),
             PathBuf::from(mount.get_untracked().trim()),
             PathBuf::from(dest.get_untracked().trim()),
+            folder.get_untracked(),
             read_only.get_untracked(),
             given(owner),
             given(mode),
@@ -179,14 +200,26 @@ fn add_window(state: State, open: Signal<bool>) -> impl View {
             load_settings(&last);
             mount.set(last);
             dest.set(String::new());
+            folder.set(false);
             read_only.set(true);
         }>
             <Column padding=Spacing::Xl gap=Spacing::Lg>
-                <Text>"Source: the file to share. Only readgate reads it, as you."</Text>
+                <Text>"Source: the file to share, or the folder whose files to share. Only readgate reads them, as you."</Text>
+                <Checkbox bind=folder>"Every file in a folder"</Checkbox>
                 <Row gap=Spacing::Sm align=Align::Center>
-                    <TextInput a11y_label="Source" placeholder="/home/you/secret.txt" bind=source grow=1.0/>
+                    <TextInput
+                        a11y_label="Source"
+                        placeholder=move || if folder.get() { "/home/you/secrets" } else { "/home/you/secret.txt" }.to_string()
+                        bind=source
+                        grow=1.0
+                    />
                     <Button @click=choose_source>"Choose…"</Button>
                 </Row>
+                <Show when=move || folder.get()>
+                    <Text text_style=TextStyle::Caption>
+                        "The files directly in it, as they are when a program looks: not its subfolders, nor symlinks. Each one asks on its own."
+                    </Text>
+                </Show>
                 <Text>"Mount folder: readgate's own folder, empty until mounted. Mappings can share one."</Text>
                 <Row gap=Spacing::Sm align=Align::Center>
                     <TextInput a11y_label="Mount folder" placeholder="/home/shared/gate" bind=mount grow=1.0/>
@@ -200,8 +233,19 @@ fn add_window(state: State, open: Signal<bool>) -> impl View {
                 <Show when=move || mode_error().is_some()>
                     <Text text_style=TextStyle::Caption>{move || mode_error().unwrap_or_default()}</Text>
                 </Show>
-                <Text>"Path inside it: where the file shows, in subfolders if you like."</Text>
-                <TextInput a11y_label="Path inside the mount folder" placeholder="keys/secret.txt" bind=dest/>
+                <Text>
+                    {move || if folder.get() {
+                        "Folder inside it: where the files show. Empty for the mount folder itself, which then holds only them."
+                    } else {
+                        "Path inside it: where the file shows, in subfolders if you like."
+                    }
+                    .to_string()}
+                </Text>
+                <TextInput
+                    a11y_label="Path inside the mount folder"
+                    placeholder=move || if folder.get() { "keys" } else { "keys/secret.txt" }.to_string()
+                    bind=dest
+                />
                 <Show when=ready>
                     <Text text_style=TextStyle::Caption>{full_dest}</Text>
                 </Show>

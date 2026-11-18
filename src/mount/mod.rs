@@ -78,7 +78,10 @@ impl Mounts {
 }
 
 /// Two dests in one mount clash if they're the same path, or one would
-/// have to be a folder for the other (`a` and `a/b`).
+/// have to be a folder for the other (`a` and `a/b`). A folder mapping's
+/// dest is its own: nothing else goes in it, so its source's files never
+/// meet another mapping's, and one at the mount folder itself (an empty
+/// dest) is the mount's only mapping.
 fn clashes(a: &Mapping, b: &Mapping) -> bool {
     let (Some(a), Some(b)) = (a.dest_components(), b.dest_components()) else { return false };
     let shorter = a.len().min(b.len());
@@ -93,7 +96,20 @@ fn check(mapping: &Mapping) -> anyhow::Result<()> {
         anyhow::bail!("the mount folder needs to be a full path");
     }
     if mapping.dest_components().is_none() {
+        if mapping.folder {
+            anyhow::bail!(
+                "the dest needs to be a folder inside the mount folder, like keys, or empty for the mount folder"
+            );
+        }
         anyhow::bail!("the dest needs to be a path inside the mount folder, like token.txt or keys/token.txt");
+    }
+    if mapping.folder {
+        // Its files are checked as they're read and written.
+        if !mapping.source.is_dir() {
+            anyhow::bail!("{} isn't a folder", mapping.source.display());
+        }
+        std::fs::read_dir(&mapping.source).with_context(|| format!("{} can't be listed", mapping.source.display()))?;
+        return Ok(());
     }
     std::fs::File::open(&mapping.source).with_context(|| format!("{} can't be read", mapping.source.display()))?;
     if !mapping.read_only {

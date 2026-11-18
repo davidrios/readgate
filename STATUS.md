@@ -32,3 +32,10 @@ tray's menu, opened the prompt. Launching readgate again opened the running
 one's window. Quit in the tray's menu and `readgate stop` unmounted
 everything and ended it, Mount Again mounted again each time, and starting
 over a dead mount left by an earlier version cleared it and mounted.
+
+Folder mappings: a source folder's files listed in their dest, without its
+subfolders or symlinks; files added to or removed from the source showed
+up within a second; a read asked, per file, and was logged with the folder
+mapping's id and that file's paths; on a writable one, a write and a save
+by rename each asked; a folder mapping at the mount folder itself kept
+another mapping out of that mount, with the clash as the reason.
