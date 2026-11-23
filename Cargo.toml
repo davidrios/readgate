@@ -12,6 +12,8 @@ publish = false
 [dependencies]
 anyhow = "=1.0.104"
 async-channel = "=2.5.0"
+# readgate attach: raw keys and redrawing in a terminal.
+crossterm = "=0.29.0"
 directories = "=6.0.0"
 # From the local checkout until 2.4.0 is on crates.io.
 mitsuami = { version = "=2.4.0", path = "../mitsuami/crates/mitsuami" }

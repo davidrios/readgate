@@ -2,27 +2,26 @@
 //! asks about each request, and keeps running in the tray after its
 //! window closes. Its window has the mappings and the log, in tabs. It's
 //! one instance per session: launching it again opens the running one's
-//! window, and `readgate stop` quits it.
+//! window, and `readgate stop` quits it. Terminals answer its questions
+//! too, through its socket (`readgate attach`).
 
 mod log;
 mod mappings;
 mod prompt;
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::OnceLock;
-use std::time::Instant;
+use std::sync::{Arc, OnceLock};
 
 use mitsuami::prelude::*;
 use time::{OffsetDateTime, UtcOffset};
 
-use crate::access_log::Decision;
 use crate::config::{Config, Mapping, MountSettings};
-use crate::gate::{self, AccessRequest, Gate, Requests};
-use crate::mount::Mounts;
-use crate::service::{self, Grants, PromptRequest};
+use crate::gate::{self, Gate};
+use crate::mount::{self, Mounts};
+use crate::remote::{self, Control, Kind};
+use crate::server::{self, Event, Hub};
 use prompt::Prompt;
 
 /// A mapping as the mappings screen lists it.
@@ -55,14 +54,16 @@ pub struct State {
     gate: Gate,
     /// Dropped (unmounting everything) to mount again, and on quitting.
     mounts: Rc<RefCell<Option<Mounts>>>,
-    grants: Rc<RefCell<Grants>>,
+    hub: Arc<Hub>,
     prompt: Prompt,
 }
 
 impl State {
-    /// Mounts the mappings and starts answering their requests.
+    /// Mounts the mappings and starts answering their requests, in the
+    /// prompt and on the socket.
     fn start(config_path: PathBuf, config: Config, prompt: Prompt) -> State {
         let (gate, requests) = gate::gate(config.prompt_timeout());
+        let hub = server::start(requests, config.log_file());
         let state = State {
             config_path: Rc::new(config_path),
             config: Rc::new(RefCell::new(config)),
@@ -71,11 +72,12 @@ impl State {
             problem: signal(None),
             gate,
             mounts: Rc::default(),
-            grants: Rc::default(),
+            hub,
             prompt,
         };
         state.remount();
-        state.serve(requests);
+        state.serve();
+        state.listen();
         state
     }
 
@@ -87,14 +89,7 @@ impl State {
         // path. Each is detached, so it goes even with files open in it.
         drop(self.mounts.borrow_mut().take());
         let config = self.config.borrow();
-        let mut mounts = Mounts::new(self.gate.clone());
-        let mut errors = HashMap::new();
-        for m in &config.mappings {
-            if let Err(e) = mounts.mount(m, &config.mount_settings(&m.mount)) {
-                eprintln!("readgate: {} isn't mounted: {e}", m.dest_path().display());
-                errors.insert(m.id, e);
-            }
-        }
+        let (mounts, mut errors) = mount::mount_all(&config, &self.gate);
         *self.mounts.borrow_mut() = Some(mounts);
         let rows = config
             .mappings
@@ -108,31 +103,58 @@ impl State {
         self.rows.set(rows);
     }
 
-    /// One request at a time: the others wait in line, their readers still
-    /// blocked, their time still running. A task of the app's scope, so
-    /// it outlives the windows.
-    fn serve(&self, requests: Requests) {
+    /// Shows the question loop's questions in the prompt, and its answers
+    /// in the log. A task of the app's scope, so it outlives the windows.
+    fn serve(&self) {
+        let events = self.hub.subscribe();
         let state = self.clone();
         spawn_local(async move {
-            while let Ok(request) = requests.recv().await {
-                let decision = state.decide(&request).await;
-                let entry = service::record(&state.config.borrow(), &request, decision);
-                state.log.push(&entry);
-                request.answer(decision);
+            while let Ok(event) = events.recv().await {
+                match event {
+                    Event::Ask(question) => state.prompt.ask(question, state.hub.clone()),
+                    Event::Done(id) => state.prompt.withdraw(id),
+                    Event::Logged(entry) => state.log.push(&entry),
+                }
             }
         });
     }
 
-    async fn decide(&self, request: &AccessRequest) -> Decision {
-        if self.grants.borrow_mut().cover(request) {
-            return Decision::Granted;
+    /// Lets terminals answer, mount again and quit, through the socket.
+    /// Without it the app still works, from its own windows.
+    fn listen(&self) {
+        let (control, controls) = async_channel::unbounded();
+        if let Err(e) = remote::listen(self.hub.clone(), control, Kind::App) {
+            eprintln!("readgate: no answering from terminals: {e:#}");
+            return;
         }
-        // Ran out while waiting in line: never shown.
-        if request.deadline <= Instant::now() {
-            return Decision::TimedOut;
+        let state = self.clone();
+        spawn_local(async move {
+            while let Ok(control) = controls.recv().await {
+                match control {
+                    Control::Stop => state.shutdown(),
+                    Control::Remount(answer) => {
+                        state.remount();
+                        let _ = answer.send(Ok(state.mount_report()));
+                    }
+                }
+            }
+        });
+    }
+
+    /// A line per mapping: mounted, or why not.
+    fn mount_report(&self) -> String {
+        let rows = self.rows.get_untracked();
+        if rows.is_empty() {
+            return "no mappings in the config".into();
         }
-        let answer = self.prompt.ask(PromptRequest::of(request)).await;
-        service::decide(&mut self.grants.borrow_mut(), request, answer)
+        let lines: Vec<String> = rows
+            .iter()
+            .map(|row| match &row.status {
+                Status::Mounted => format!("{}: mounted", row.mapping.dest_path().display()),
+                Status::Failed(e) => format!("{}: not mounted: {e}", row.mapping.dest_path().display()),
+            })
+            .collect();
+        lines.join("\n")
     }
 
     /// Saves the config, and mounts its mappings.
@@ -184,6 +206,7 @@ impl State {
     /// error as the mount goes.
     fn shutdown(&self) {
         drop(self.mounts.borrow_mut().take());
+        let _ = std::fs::remove_file(remote::socket_path());
         quit();
     }
 }
@@ -214,9 +237,6 @@ pub enum Start {
     Open,
     /// In the tray only, as at login.
     Hidden,
-    /// To quit the running one: `readgate stop`. Started with none
-    /// running, it quits at once.
-    Stop,
 }
 
 pub fn run(config_path: PathBuf, config: Config, start: Start) {
@@ -232,10 +252,6 @@ pub fn run(config_path: PathBuf, config: Config, start: Start) {
         .runs_without_windows()
         .open(move || {
             let (config_path, config) = setup.borrow_mut().take().expect("readgate starts once");
-            if start == Start::Stop {
-                quit();
-                return Window::new("readgate");
-            }
             let state = State::start(config_path, config, Prompt::new());
             *shared.borrow_mut() = Some(state.clone());
             main_window(state, start == Start::Open)
@@ -255,15 +271,11 @@ fn main_window(state: State, open_now: bool) -> Window {
         open.set(true);
         window.present();
     };
-    {
-        let state = state.clone();
-        on_reopen(move |reopen| match reopen.args().first().map(String::as_str) {
-            Some("stop") => state.shutdown(),
-            // Another login's start: it's running already.
-            Some("--hidden") => {}
-            _ => show(),
-        });
-    }
+    on_reopen(move |reopen| match reopen.args().first().map(String::as_str) {
+        // Another login's start: it's running already.
+        Some("--hidden") => {}
+        _ => show(),
+    });
     set_tray(tray(state.clone(), show));
     Window::new("readgate")
         .size(Size::new(900.0, 520.0))
@@ -313,5 +325,15 @@ fn root(state: State) -> impl View {
                 <Text>{move || problem.get().unwrap_or_default()}</Text>
             </Show>
         </Column>
+    }
+}
+
+/// Whether there's a display to show the app on. Only Linux can be
+/// without one while logged in; there, GTK needs Wayland or X11.
+pub fn has_display() -> bool {
+    if cfg!(target_os = "linux") {
+        ["WAYLAND_DISPLAY", "DISPLAY"].iter().any(|v| std::env::var_os(v).is_some_and(|d| !d.is_empty()))
+    } else {
+        true
     }
 }

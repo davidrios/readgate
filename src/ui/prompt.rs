@@ -1,22 +1,25 @@
-//! The prompt: one request at a time. It posts a notification, and its
-//! click opens the window with everything about the reader, which asks.
-//! The tray's menu opens it too. Where nothing shows notifications, the
-//! window opens straight away. When its time runs out, it's a no.
+//! The prompt: one question at a time, from the question loop. It posts
+//! a notification, and its click opens the window with everything about
+//! the reader, which asks. The tray's menu opens it too. Where nothing
+//! shows notifications, the window opens straight away. An answer given
+//! in a terminal, or the question's time running out, takes it down.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use mitsuami::prelude::*;
 
-use crate::service::{Answer, PromptRequest};
+use crate::server::{Hub, Question};
+use crate::service::{Answer, countdown};
 
 /// The prompt's one notification.
 const NOTIFICATION: &str = "request";
 
-/// The request being asked, and where its answer goes.
+/// The question being asked, and where its answer goes.
 #[derive(Clone)]
 struct Asking {
-    request: PromptRequest,
-    answers: async_channel::Sender<Answer>,
+    question: Question,
+    hub: Arc<Hub>,
 }
 
 #[derive(Clone, Copy)]
@@ -44,7 +47,7 @@ impl Prompt {
 
     /// The question being asked, if one is.
     pub fn question(self) -> Option<String> {
-        self.asking.get().map(|a| a.request.title)
+        self.asking.get().map(|a| a.question.request.title)
     }
 
     /// Opens the window, or brings it forward, while a question is asked.
@@ -55,24 +58,23 @@ impl Prompt {
         }
     }
 
-    /// Asks the user about `request`, and waits for the answer, or for its
-    /// time to run out.
-    pub async fn ask(self, request: PromptRequest) -> Answer {
-        // Room for one: the first answer wins, and the rest are dropped.
-        let (answers, answered) = async_channel::bounded(1);
-        let deadline = request.deadline;
-        let notification = Notification::new(request.title.clone())
-            .body(format!("{}\nClick to see who's asking, and answer.", request.summary))
+    fn asking_id(self) -> Option<u64> {
+        self.asking.get_untracked().map(|a| a.question.id)
+    }
+
+    /// Asks the user `question`; the answer goes to `hub`.
+    pub fn ask(self, question: Question, hub: Arc<Hub>) {
+        let id = question.id;
+        let deadline = question.request.deadline;
+        let notification = Notification::new(question.request.title.clone())
+            .body(format!("{}\nClick to see who's asking, and answer.", question.request.summary))
             .id(NOTIFICATION);
-        self.asking.set(Some(Asking { request, answers: answers.clone() }));
+        self.asking.set(Some(Asking { question, hub }));
+        // The countdown shows; the question loop is what times out.
         let remaining = self.remaining;
-        let countdown = spawn_local(async move {
-            loop {
+        spawn_local(async move {
+            while self.asking_id() == Some(id) {
                 let left = deadline.saturating_duration_since(Instant::now());
-                if left.is_zero() {
-                    let _ = answers.try_send(Answer::TimedOut);
-                    return;
-                }
                 remaining.set(left.as_secs() + u64::from(left.subsec_nanos() > 0));
                 // Wake when the shown number changes.
                 sleep(match left - Duration::from_secs(left.as_secs()) {
@@ -82,22 +84,36 @@ impl Prompt {
                 .await;
             }
         });
-        if let Err(e) = notify(notification).await {
-            // Nothing to show it (or they're turned off): ask in the window.
-            eprintln!("readgate: no notification ({e}), showing the window");
-            self.show();
+        spawn_local(async move {
+            if let Err(e) = notify(notification).await {
+                // Nothing to show it (or they're turned off): ask in the window.
+                eprintln!("readgate: no notification ({e}), showing the window");
+                if self.asking_id() == Some(id) {
+                    self.show();
+                }
+            }
+        });
+    }
+
+    /// Takes question `id` down: it was answered, here or elsewhere, or
+    /// its time ran out.
+    pub fn withdraw(self, id: u64) {
+        if self.asking_id() == Some(id) {
+            self.clear();
         }
-        let answer = answered.recv().await.unwrap_or(Answer::Deny);
-        countdown.cancel();
-        withdraw_notification(NOTIFICATION);
-        self.showing.set(false);
+    }
+
+    fn clear(self) {
+        // First: closing the window would deny the question still asked.
         self.asking.set(None);
-        answer
+        self.showing.set(false);
+        withdraw_notification(NOTIFICATION);
     }
 
     fn answer(self, answer: Answer) {
         if let Some(asking) = self.asking.get_untracked() {
-            let _ = asking.answers.try_send(answer);
+            asking.hub.answer(asking.question.id, answer);
+            self.clear();
         }
     }
 
@@ -114,7 +130,7 @@ impl Prompt {
     }
 
     fn content(self) -> impl View {
-        let request = move || self.asking.get().map(|a| a.request);
+        let request = move || self.asking.get().map(|a| a.question.request);
         let title = move || request().map(|r| r.title).unwrap_or_default();
         let details = move || request().map(|r| r.details).unwrap_or_default();
         let can_grant = move || request().is_some_and(|r| r.grant.is_some());
@@ -176,9 +192,4 @@ impl Prompt {
             </Column>
         }
     }
-}
-
-/// `1:45`, or `42 s` under a minute.
-fn countdown(seconds: u64) -> String {
-    if seconds >= 60 { format!("{}:{:02}", seconds / 60, seconds % 60) } else { format!("{seconds} s") }
 }

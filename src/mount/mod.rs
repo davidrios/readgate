@@ -9,7 +9,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
-use crate::config::{self, Mapping, MountSettings};
+use crate::config::{self, Config, Mapping, MountSettings};
 use crate::gate::Gate;
 
 #[cfg(target_os = "linux")]
@@ -75,6 +75,21 @@ impl Mounts {
         self.folders.insert(folder, Folder { mappings, _mounted: mounted });
         Ok(())
     }
+}
+
+/// Mounts every mapping in `config`. Returns the mounts, which unmount
+/// as they're dropped, and why each mapping that isn't mounted isn't, by
+/// its id.
+pub fn mount_all(config: &Config, gate: &Gate) -> (Mounts, HashMap<u64, String>) {
+    let mut mounts = Mounts::new(gate.clone());
+    let mut errors = HashMap::new();
+    for m in &config.mappings {
+        if let Err(e) = mounts.mount(m, &config.mount_settings(&m.mount)) {
+            eprintln!("readgate: {} isn't mounted: {e}", m.dest_path().display());
+            errors.insert(m.id, e);
+        }
+    }
+    (mounts, errors)
 }
 
 /// Two dests in one mount clash if they're the same path, or one would

@@ -1,13 +1,12 @@
 //! What the app does with a request, apart from asking: the grants of
 //! "Allow for 1 Minute", what the prompt shows, and the access log.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use time::OffsetDateTime;
 
 use crate::access_log::{self, Access, Decision, LogEntry};
-use crate::config::Config;
 use crate::gate::AccessRequest;
 use crate::reader::Ancestor;
 
@@ -91,7 +90,7 @@ pub struct PromptRequest {
 }
 
 /// One of "Allow for 1 Minute"'s other choices.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GrantChoice {
     /// Its place in the reader's ancestors.
     pub at: usize,
@@ -159,9 +158,9 @@ pub fn decide(grants: &mut Grants, request: &AccessRequest, answer: Answer) -> D
     }
 }
 
-/// Appends the answer to the access log, and returns its entry for the
-/// log screen.
-pub fn record(config: &Config, request: &AccessRequest, decision: Decision) -> LogEntry {
+/// Appends the answer to the access log at `log_file`, and returns its
+/// entry for the log screen.
+pub fn record(log_file: &Path, request: &AccessRequest, decision: Decision) -> LogEntry {
     let entry = LogEntry {
         time: OffsetDateTime::now_utc(),
         mapping_id: request.mapping.id,
@@ -171,8 +170,13 @@ pub fn record(config: &Config, request: &AccessRequest, decision: Decision) -> L
         access: request.access,
         decision,
     };
-    if let Err(e) = access_log::append(&config.log_file(), &entry) {
+    if let Err(e) = access_log::append(log_file, &entry) {
         eprintln!("readgate: couldn't write the access log: {e:#}");
     }
     entry
+}
+
+/// Time left on a question: `1:45`, or `42 s` under a minute.
+pub fn countdown(seconds: u64) -> String {
+    if seconds >= 60 { format!("{}:{:02}", seconds / 60, seconds % 60) } else { format!("{seconds} s") }
 }

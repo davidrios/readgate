@@ -58,6 +58,42 @@ tray, and its mounts stay up until you quit it.
 - It doesn't survive logging out if your session ends your processes, as
   systemd does with `KillUserProcesses`.
 
+## From a terminal
+
+Any terminal of yours can answer readgate's questions, over SSH too:
+
+```
+readgate attach
+```
+
+It waits, and when a read comes in it rings the terminal's bell and shows
+the question with everything about the reader. Keys answer it: `a`
+allows, `d` or Escape denies, `m` allows for 1 Minute to the reader's
+parent, and `1` to `9` allow for 1 Minute to the programs further up, as
+the button's menu does. `q` detaches and leaves the question up.
+
+- The first answer wins, from any attached terminal or the app's window,
+  and the others take the question down. A terminal that attaches while a
+  question is up gets it straight away.
+- It talks to the running readgate over a Unix socket in your runtime
+  folder (`$XDG_RUNTIME_DIR/readgate.sock`), which an SSH session shares
+  with your desktop session. The socket is yours alone (`0600`), and
+  readgate drops connections from any other user, since whoever connects
+  can allow reads.
+- `readgate stop` and `readgate remount` (mount the mappings again) go
+  over it too.
+
+On a machine with no display, `readgate serve` runs readgate without the
+app: it mounts the config's mappings and asks on the socket, and nothing
+else. You edit the mappings in the config file and run `readgate remount`,
+which reads the file again and prints which mappings are mounted.
+`readgate stop`, Ctrl-C or `SIGTERM` unmount everything and end it. If
+nothing is attached when a read comes in, the read waits in line as it
+does for an unclicked notification, so attaching within the timeout still
+gets to answer it. readgate doesn't pick `serve` by itself: launched with
+no display, the app says to run `serve`, and with `serve` running, the app
+refuses to start. A change to the timeout or the log file takes a restart.
+
 ## Mount folders
 
 macFUSE and FUSE-T on macOS and WinFsp on Windows only mount folders.
@@ -451,31 +487,40 @@ GDK_BACKEND=broadway BROADWAY_DISPLAY=:7 cargo run
 
 | File | |
 |---|---|
-| `src/main.rs` | The commands: the app, `--hidden`, `stop` |
+| `src/main.rs` | The commands: the app, `--hidden`, `serve`, `attach`, `remount`, `stop` |
 | `src/config.rs` | Config file, mappings, mount folders' settings, the scratch folders |
 | `src/service.rs` | "Allow for 1 Minute" grants, what a prompt shows, the access log |
+| `src/server.rs` | The question loop: grants, asking every front-end, the first answer wins |
+| `src/remote.rs` | The socket: its messages, the peer check, the client end |
+| `src/attach.rs` | `readgate attach`, the terminal front-end |
+| `src/serve.rs` | `readgate serve`, readgate without the app |
 | `src/perms.rs` | A mount folder's owner and mode, from text to numbers |
 | `src/gate.rs` | A filesystem thread sends a request and blocks; the app answers |
 | `src/mount/mod.rs` | Groups mappings by mount folder, checks for clashes, mounts each folder |
 | `src/mount/fuse.rs` | The FUSE filesystem: a tree of gated files, their folders, and created files; mounting and unmounting |
 | `src/reader.rs` | What the platform says about a pid |
 | `src/access_log.rs` | Log entries, and appending them to the file |
-| `src/ui/mod.rs` | The app: mounting, the request loop, the tray, the window |
+| `src/ui/mod.rs` | The app: mounting, the tray, the window, its end of the question loop |
 | `src/ui/mappings.rs`, `src/ui/log.rs` | The window's screens |
-| `src/ui/prompt.rs` | The prompt: its notification and window, one request at a time |
+| `src/ui/prompt.rs` | The prompt: its notification and window, one question at a time |
 
 FUSE requests come in on fuser's session thread. A request that needs an
 answer moves to a thread of its own, so a prompt left up for minutes doesn't
 stop other requests, such as another reader's `getattr` or a `release`. That
-thread sends the request to the app's loop, a task on the UI thread, over a
+thread sends the request to the question loop, a thread of its own, over a
 channel and blocks on the reply. If the loop is gone, the answer is Deny.
-The prompt answers itself at the deadline. As a backstop, the filesystem
+The loop sends each question to every front-end that subscribed, the
+app's prompt (through a task on the UI thread) and each attached
+terminal, takes the first answer for that question, and times it out at
+the deadline. As a backstop, the filesystem
 thread itself stops waiting 5 seconds after the deadline, so a stuck UI
 can't hold a reader forever.
 
 ## Limits
 
 - readgate has to be running. While it's not, the mount folder is empty.
+- Answering from a terminal needs a Unix socket, so it isn't there on
+  Windows yet.
 - Plain GNOME shows no tray icon, so a closed window comes back only by
   launching readgate again.
 - Root can read the source directly. readgate controls one path to a file,

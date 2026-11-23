@@ -39,3 +39,20 @@ up within a second; a read asked, per file, and was logged with the folder
 mapping's id and that file's paths; on a writable one, a write and a save
 by rename each asked; a folder mapping at the mount folder itself kept
 another mapping out of that mount, with the clash as the reason.
+
+From a terminal: `readgate serve` started with no display, mounted, and
+refused a second `serve`; the app refused to start without a display and
+while `serve` ran, and `serve` refused while the app ran. `readgate attach`
+showed each read with the bell; `a` let `cat` read, Escape made it fail
+with `Input/output error`, and `m` covered a second `cat` from the same
+shell, logged as `granted`. With two terminals attached, one that attached
+while a question was up got it, answering in it took it down in the
+other, and a timeout took it down in both. `readgate remount` read an
+edited config and moved the dest into a subfolder. `readgate stop` and
+Ctrl-C on `serve` unmounted everything, removed the socket and ended the
+attached terminals. Against the app (on its own D-Bus session), an
+attached terminal got the question, its answer let the read through, and
+`remount` and `stop` worked. Not tried: whether the app's prompt window
+goes away when a terminal answers (it does in the code, but nobody looked
+at it), and a connection from another user, which the peer check refuses.
+
