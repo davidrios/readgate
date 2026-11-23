@@ -70,7 +70,9 @@ It waits, and when a read comes in it rings the terminal's bell and shows
 the question with everything about the reader. Keys answer it: `a`
 allows, `d` or Escape denies, `m` allows for 1 Minute to the reader's
 parent, and `1` to `9` allow for 1 Minute to the programs further up, as
-the button's menu does. `q` detaches and leaves the question up.
+the button's menu does. `q` detaches and leaves the question up. For the first
+moment a question is up, keys do nothing, so a key meant for the one
+before it can't answer it.
 
 - The first answer wins, from any attached terminal or the app's window,
   and the others take the question down. A terminal that attaches while a
@@ -523,6 +525,9 @@ can't hold a reader forever.
   Windows yet.
 - Plain GNOME shows no tray icon, so a closed window comes back only by
   launching readgate again.
+- Any process of yours can answer through the socket, as `readgate
+  attach` does. It's only other users' processes that readgate keeps
+  out: yours can read the source directly anyway.
 - Root can read the source directly. readgate controls one path to a file,
   not who can reach the file.
 - An allowed reader can do what it likes with the bytes it got, including

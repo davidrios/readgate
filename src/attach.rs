@@ -20,9 +20,15 @@ use crate::service::countdown;
 /// How often the countdown is redrawn, and the keyboard checked.
 const TICK: Duration = Duration::from_millis(250);
 
+/// How long a new question ignores keys, so a key meant for the one
+/// before (pressed twice, or repeating) can't answer it unread.
+const GRACE: Duration = Duration::from_millis(750);
+
 struct Asking {
     question: WireQuestion,
     deadline: Instant,
+    /// When it came in, for the grace.
+    shown: Instant,
 }
 
 pub fn run() -> Result<()> {
@@ -52,7 +58,11 @@ pub fn run() -> Result<()> {
             match received.try_recv() {
                 Ok(Some(ToClient::Ask(question))) => {
                     let deadline = Instant::now() + Duration::from_secs_f64(question.seconds_left.max(0.0));
-                    asking = Some(Asking { question, deadline });
+                    asking = Some(Asking { question, deadline, shown: Instant::now() });
+                    // Keys pressed before it showed weren't for it.
+                    while event::poll(Duration::ZERO)? {
+                        event::read()?;
+                    }
                     screen.bell()?;
                 }
                 Ok(Some(ToClient::Done { id })) => {
@@ -89,6 +99,9 @@ pub fn run() -> Result<()> {
             return Ok(());
         }
         let Some(a) = &asking else { continue };
+        if a.shown.elapsed() < GRACE {
+            continue;
+        }
         let q = &a.question;
         let answer = match key.code {
             KeyCode::Char('a') => WireAnswer::Allow,
